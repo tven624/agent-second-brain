@@ -4,6 +4,6 @@
     "node": "22"
   },
   "deploy": {
-    "startCommand": "uv run python -m d_brain"
+    "startCommand": "bash scripts/start-railway.sh"
   }
 }
