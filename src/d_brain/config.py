@@ -17,7 +17,14 @@ class Settings(BaseSettings):
 
     telegram_bot_token: str = Field(description="Telegram Bot API token")
     deepgram_api_key: str = Field(description="Deepgram API key for transcription")
-    todoist_api_key: str = Field(default="", description="Todoist API key for tasks")
+    ticktick_api_token: str = Field(
+        default="",
+        description="TickTick API token for task management MCP",
+    )
+    ticktick_api_domain: str = Field(
+        default="",
+        description="Optional TickTick API domain override (e.g. dida365)",
+    )
     vault_path: Path = Field(
         default=Path("./vault"),
         description="Path to Obsidian vault directory",

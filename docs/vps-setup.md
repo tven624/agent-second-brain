@@ -110,7 +110,7 @@ uv --version
 
 ## Step 7: Install Node.js
 
-Required for MCP servers (Todoist integration):
+Required for MCP servers (TickTick integration):
 
 ```bash
 curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
@@ -123,23 +123,23 @@ npm --version
 
 ---
 
-## Step 8: Install Claude CLI
+## Step 8: Install Codex CLI
 
 ```bash
-npm install -g @anthropic-ai/claude-code
+npm install -g @openai/codex
 
 # Verify
-which claude
-claude --version
+which codex
+codex --version
 
 # Authenticate
-claude auth login
+codex login
 ```
 
-After `claude auth login`:
+After `codex login`:
 1. A URL appears
 2. Copy and open it in browser on your computer
-3. Log in to Anthropic account
+3. Log in to your OpenAI account
 4. Authorize access
 5. Return to terminal — it will confirm
 
@@ -194,10 +194,10 @@ uv run python -c "import aiogram; print('aiogram OK')"
 3. Settings → API Keys
 4. Create key and copy
 
-### Todoist API Token (optional)
+### TickTick API Token (optional)
 
-1. Go to https://todoist.com/
-2. Settings → Integrations → Developer
+1. Go to https://ticktick.com/
+2. Open account settings and find API token
 3. Copy API token
 
 ---
@@ -213,7 +213,8 @@ Paste (replace with your values):
 ```bash
 TELEGRAM_BOT_TOKEN=7123456789:AAHdN8J2K4m5N6o7P8q9R0s1T2u3V4w5X6y
 DEEPGRAM_API_KEY=a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0
-TODOIST_API_KEY=
+TICKTICK_API_TOKEN=
+TICKTICK_API_DOMAIN=
 VAULT_PATH=./vault
 ALLOWED_USER_IDS=[123456789]
 ```
@@ -471,16 +472,16 @@ sudo journalctl -u d-brain-bot | grep -i error
 ### Processing errors
 
 ```bash
-claude --version
-claude auth status
-claude auth login  # if needed
+codex --version
+codex login status
+codex login  # if needed
 ```
 
-### Todoist not working
+### TickTick not working
 
 ```bash
-cat ~/projects/agent-second-brain/.env | grep TODOIST
-mcp-cli call todoist find-tasks-by-date '{"startDate": "today"}'
+cat ~/projects/agent-second-brain/.env | grep TICKTICK
+mcp-cli call ticktick get_projects '{}'
 ```
 
 ### Permission errors

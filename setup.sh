@@ -102,10 +102,10 @@ validate_deepgram_key() {
     return 1
 }
 
-validate_todoist_key() {
+validate_ticktick_token() {
     local key="$1"
-    # Todoist API token is alphanumeric, 40 chars
-    if [[ $key =~ ^[A-Za-z0-9]+$ ]] && [ ${#key} -ge 30 ]; then
+    # TickTick token format can vary; validate as non-empty reasonably long string.
+    if [[ -n "$key" ]] && [ ${#key} -ge 10 ]; then
         return 0
     fi
     return 1
@@ -217,18 +217,18 @@ install_nodejs() {
     success "Node.js $(node --version) installed"
 }
 
-install_claude_cli() {
-    step "Installing Claude CLI"
+install_codex_cli() {
+    step "Installing Codex CLI"
 
-    if check_command claude; then
-        success "Claude CLI already installed: $(claude --version 2>/dev/null || echo 'version unknown')"
+    if check_command codex; then
+        success "Codex CLI already installed: $(codex --version 2>/dev/null || echo 'version unknown')"
         return
     fi
 
-    info "Installing @anthropic-ai/claude-code globally..."
-    sudo npm install -g @anthropic-ai/claude-code
+    info "Installing @openai/codex globally..."
+    sudo npm install -g @openai/codex
 
-    success "Claude CLI installed"
+    success "Codex CLI installed"
 }
 
 # =============================================================================
@@ -287,7 +287,7 @@ collect_tokens() {
     echo "  - Telegram Bot Token (from @BotFather)"
     echo "  - Your Telegram ID (from @userinfobot)"
     echo "  - Deepgram API Key (from console.deepgram.com)"
-    echo "  - Todoist API Token (from Todoist Settings > Integrations > Developer)"
+    echo "  - TickTick API Token (from TickTick account settings)"
     echo ""
 
     # Telegram Bot Token
@@ -326,15 +326,15 @@ collect_tokens() {
         fi
     done
 
-    # Todoist API Token
+    # TickTick API Token
     while true; do
-        ask "Todoist API Token (from Settings > Integrations > Developer):"
-        read -r TODOIST_API_KEY
-        if validate_todoist_key "$TODOIST_API_KEY"; then
+        ask "TickTick API Token (from account settings):"
+        read -r TICKTICK_API_TOKEN
+        if validate_ticktick_token "$TICKTICK_API_TOKEN"; then
             success "API Token format valid"
             break
         else
-            error "Invalid API token format. Should be alphanumeric, 30+ characters"
+            error "Invalid API token format. Please paste the full token."
         fi
     done
 }
@@ -360,8 +360,14 @@ TELEGRAM_BOT_TOKEN=$TELEGRAM_BOT_TOKEN
 # Deepgram API key for voice transcription
 DEEPGRAM_API_KEY=$DEEPGRAM_API_KEY
 
-# Todoist API key for task management
-TODOIST_API_KEY=$TODOIST_API_KEY
+# TickTick API token for task management MCP
+TICKTICK_API_TOKEN=$TICKTICK_API_TOKEN
+
+# Optional TickTick API domain override
+TICKTICK_API_DOMAIN=$TICKTICK_API_DOMAIN
+
+# Optional Codex CLI command override
+CODEX_CLI_COMMAND=codex
 
 # Path to Obsidian vault directory
 VAULT_PATH=./vault
@@ -504,11 +510,11 @@ check_status() {
         ERRORS+=("Node.js not found")
     fi
 
-    # Check Claude CLI
-    if check_command claude; then
-        success "Claude CLI: installed"
+    # Check Codex CLI
+    if check_command codex; then
+        success "Codex CLI: installed"
     else
-        WARNINGS+=("Claude CLI not found (needed for AI processing)")
+        WARNINGS+=("Codex CLI not found (needed for AI processing)")
     fi
 
     # Check .env
@@ -573,21 +579,21 @@ check_status() {
     fi
 }
 
-authorize_claude() {
-    step "Claude CLI Authorization"
+authorize_codex() {
+    step "Codex CLI Authorization"
 
-    if claude auth status 2>/dev/null | grep -q "Logged in"; then
-        success "Claude CLI already authorized"
+    if codex login status 2>/dev/null | grep -q "Logged in"; then
+        success "Codex CLI already authorized"
         return
     fi
 
-    warn "Claude CLI needs authorization"
+    warn "Codex CLI needs authorization"
     echo ""
     echo "Run this command manually:"
-    echo -e "  ${CYAN}claude auth login${NC}"
+    echo -e "  ${CYAN}codex login${NC}"
     echo ""
     echo "This will open a browser for authentication."
-    echo "After authorizing, the bot will be able to use Claude for AI processing."
+    echo "After authorizing, the bot will be able to use Codex for AI processing."
     echo ""
 }
 
@@ -602,7 +608,7 @@ main() {
     check_os
 
     echo "This script will:"
-    echo "  1. Install required software (Python, Node.js, uv, Claude CLI)"
+    echo "  1. Install required software (Python, Node.js, uv, Codex CLI)"
     echo "  2. Clone your fork of the repository"
     echo "  3. Ask for your API tokens"
     echo "  4. Create configuration files"
@@ -620,7 +626,7 @@ main() {
     install_python
     install_uv
     install_nodejs
-    install_claude_cli
+    install_codex_cli
 
     # Configuration
     clone_repository
@@ -629,7 +635,7 @@ main() {
     install_dependencies
     configure_systemd
     configure_git_remote
-    authorize_claude
+    authorize_codex
 
     # Final check
     check_status

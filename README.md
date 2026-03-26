@@ -30,7 +30,7 @@ The agent handles everything else:
 
 - **Transcribes** your voice notes (Deepgram, takes seconds)
 - **Classifies** each entry - task, idea, client note, goal update, random thought
-- **Creates tasks** in Todoist with the right priority and due date
+- **Creates tasks** in TickTick with the right priority and due date
 - **Saves everything** to an Obsidian vault with proper links and tags
 - **Sends you a daily report** at 9pm - what happened, what got done, what's still hanging
 - **Remembers what matters, forgets what doesn't** - memory fades over time like a real brain
@@ -47,13 +47,13 @@ This isn't a button-pressing bot. You have a conversation.
 >
 > **You:** turn the second idea into a task for Monday
 >
-> **Bot:** *creates the task in Todoist*
+> **Bot:** *creates the task in TickTick*
 >
 > **You:** actually make it high priority and add a subtask for the presentation
 >
 > **Bot:** *updates the task*
 
-It has access to your entire vault, all your goals, and your Todoist. Ask it anything about your own notes, and it'll find the answer.
+It has access to your entire vault, all your goals, and your TickTick. Ask it anything about your own notes, and it'll find the answer.
 
 ## Memory that works like memory
 
@@ -96,33 +96,33 @@ You don't run maintenance. The agent does.
 | Forwarded article from a chat | Saves with source, extracts key points |
 | Photo of a whiteboard | Saves with AI-generated description |
 | "Process" button | Runs the full pipeline right now |
-| "What are my priorities this week?" | Reads your goals and Todoist, gives you a straight answer |
+| "What are my priorities this week?" | Reads your goals and TickTick, gives you a straight answer |
 
 ## How it works (for the curious)
 
 The daily processing runs in three phases:
 
 1. **Capture** - reads today's entries, classifies each one (task? idea? CRM update? goal progress?)
-2. **Execute** - creates Todoist tasks, writes vault files, updates cards
+2. **Execute** - creates TickTick tasks, writes vault files, updates cards
 3. **Reflect** - generates a summary report, updates long-term memory, sends it to Telegram
 
 Each phase produces a clean JSON that the next phase picks up. If something breaks, you can see exactly where and why.
 
 ```
-Telegram → Deepgram → Claude Code → Todoist + Obsidian vault → Telegram report
+Telegram → Deepgram → Codex CLI → TickTick + Obsidian vault → Telegram report
 ```
 
 ## What it costs
 
 | Service | Cost |
 |---------|------|
-| Claude Pro | $20/mo |
+| OpenAI API (Codex) | Usage-based |
 | VPS (any cheap one works) | ~$5/mo |
 | Deepgram | Free tier ($200 credit) |
-| Todoist | Free plan works |
-| **Total** | **~$25/mo** |
+| TickTick | Free plan works |
+| **Total** | **~$5/mo + OpenAI usage** |
 
-$25/month for a personal assistant that organizes your life, never sleeps, and gets better the more you use it.
+The base infra can stay very cheap; AI cost scales with your actual usage.
 
 ## Quick start
 
@@ -142,8 +142,8 @@ cd agent-second-brain
 Open these files and replace the placeholders:
 
 - `vault/goals/` - your vision, yearly goals, monthly priorities, weekly focus
-- `vault/.claude/skills/dbrain-processor/references/about.md` - tell the agent about yourself
-- `vault/.claude/skills/dbrain-processor/references/classification.md` - how you want entries sorted
+- `vault/.codex/skills/dbrain-processor/references/about.md` - tell the agent about yourself
+- `vault/.codex/skills/dbrain-processor/references/classification.md` - how you want entries sorted
 
 ### 4. Get four API keys
 
@@ -152,7 +152,7 @@ Open these files and replace the placeholders:
 | Telegram Bot Token | [@BotFather](https://t.me/BotFather) | 2 min |
 | Your Telegram ID | [@userinfobot](https://t.me/userinfobot) | 30 sec |
 | Deepgram API Key | [console.deepgram.com](https://console.deepgram.com/) | 3 min |
-| Todoist API Token | Todoist → Settings → Integrations → Developer | 1 min |
+| TickTick API Token | TickTick account settings | 1 min |
 
 ### 5. Deploy
 
@@ -195,7 +195,7 @@ The agent has five built-in skills:
 | **agent-memory** | Ebbinghaus decay engine - remembers, forgets, recalls |
 | **vault-health** | Scores vault health, fixes links, generates MOCs |
 | **graph-builder** | Maps relationships between notes, finds clusters |
-| **todoist-ai** | Manages tasks, projects, priorities |
+| **ticktick-mcp** | Manages tasks, projects, priorities |
 
 Want just the memory engine? See [agent-memory-skill](https://github.com/smixs/agent-memory-skill) - works standalone, no dependencies.
 
@@ -204,9 +204,10 @@ Want just the memory engine? See [agent-memory-skill](https://github.com/smixs/a
 | File | What it controls |
 |------|-----------------|
 | `.env` | API tokens (copy from `.env.example`) |
+| `.env` (`CODEX_CLI_COMMAND`) | Optional override for Codex executable name/path |
 | `.memory-config.json` | How fast memories decay, tier boundaries |
 | `mcp-config.json` | External tool connections |
-| `vault/.claude/CLAUDE.md` | Agent personality and rules |
+| `vault/.codex/AGENTS.md` | Agent personality and rules |
 
 All secrets stay in `.env`, which is gitignored. Don't commit tokens.
 

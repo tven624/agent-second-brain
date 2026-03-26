@@ -149,15 +149,15 @@ install_uv() {
 }
 
 #######################################
-# Install Claude Code CLI
+# Install Codex CLI
 #######################################
-install_claude() {
-    if has_command claude; then
-        success "Claude Code already installed: $(claude --version)"
+install_codex() {
+    if has_command codex; then
+        success "Codex CLI already installed: $(codex --version)"
     else
-        info "Installing Claude Code CLI..."
-        npm install -g @anthropic-ai/claude-code
-        success "Claude Code installed"
+        info "Installing Codex CLI..."
+        npm install -g @openai/codex
+        success "Codex CLI installed"
     fi
 }
 
@@ -255,15 +255,15 @@ collect_tokens() {
         "https://console.deepgram.com/" \
         "DEEPGRAM_API_KEY"
 
-    # Todoist API Token (optional)
+    # TickTick API Token (optional)
     prompt_token \
-        "4/4: Todoist API Token (optional)" \
+        "4/4: TickTick API Token (optional)" \
         "For task management:
-1. Log in to todoist.com
-2. Settings → Integrations → Developer
+1. Log in to ticktick.com
+2. Open Account settings and find your API token
 3. Copy the API token" \
-        "https://todoist.com/app/settings/integrations/developer" \
-        "TODOIST_API_KEY" \
+        "https://ticktick.com" \
+        "TICKTICK_API_TOKEN" \
         "true"
 }
 
@@ -280,8 +280,14 @@ TELEGRAM_BOT_TOKEN=$TELEGRAM_BOT_TOKEN
 # Deepgram API Key (from console.deepgram.com)
 DEEPGRAM_API_KEY=$DEEPGRAM_API_KEY
 
-# Todoist API Token (optional)
-TODOIST_API_KEY=$TODOIST_API_KEY
+# TickTick API Token (optional)
+TICKTICK_API_TOKEN=$TICKTICK_API_TOKEN
+
+# Optional TickTick API domain override
+TICKTICK_API_DOMAIN=$TICKTICK_API_DOMAIN
+
+# Optional Codex CLI command override
+CODEX_CLI_COMMAND=codex
 
 # Path to vault (don't change)
 VAULT_PATH=./vault
@@ -316,18 +322,18 @@ install_mcp_cli() {
         success "mcp-cli installed"
     fi
 
-    # Configure mcp-cli for Todoist if token provided
-    if [[ -n "$TODOIST_API_KEY" ]]; then
-        info "Configuring mcp-cli for Todoist..."
+    # Configure mcp-cli for TickTick if token provided
+    if [[ -n "$TICKTICK_API_TOKEN" ]]; then
+        info "Configuring mcp-cli for TickTick..."
         mkdir -p ~/.config/mcp
         cat > ~/.config/mcp/mcp_servers.json << EOF
 {
   "mcpServers": {
-    "todoist": {
+    "ticktick": {
       "command": "npx",
-      "args": ["-y", "@doist/todoist-ai"],
+      "args": ["-y", "@ticktick/mcp-server"],
       "env": {
-        "TODOIST_API_KEY": "$TODOIST_API_KEY"
+        "API_TOKEN": "$TICKTICK_API_TOKEN"
       }
     }
   }
@@ -338,24 +344,24 @@ EOF
 }
 
 #######################################
-# Authenticate Claude
+# Authenticate Codex
 #######################################
-auth_claude() {
+auth_codex() {
     echo
     echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo -e "${YELLOW}Claude Authentication${NC}"
-    echo "You need Claude Pro subscription (\$20/month) for this to work."
+    echo -e "${YELLOW}Codex Authentication${NC}"
+    echo "Sign in to Codex (OpenAI account or API key) to enable AI processing."
     echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo
 
-    if claude auth status &>/dev/null; then
-        success "Claude already authenticated"
+    if codex login status &>/dev/null; then
+        success "Codex already authenticated"
     else
-        info "Starting Claude authentication..."
-        echo "A browser window will open. Log in with your Anthropic account."
+        info "Starting Codex authentication..."
+        echo "A browser window may open. Follow the login flow for your OpenAI account."
         echo
-        claude auth login
-        success "Claude authenticated"
+        codex login
+        success "Codex authenticated"
     fi
 }
 
@@ -511,13 +517,13 @@ main() {
     install_homebrew
     install_dependencies
     install_uv
-    install_claude
+    install_codex
     clone_repo
     collect_tokens
     create_env
     install_python_deps
     install_mcp_cli
-    auth_claude
+    auth_codex
     setup_autostart
     start_bot
 }

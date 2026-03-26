@@ -1,9 +1,10 @@
 {
   "mcpServers": {
-    "todoist": {
+    "ticktick": {
       "type": "stdio",
       "command": "npx",
-      "args": ["-y", "@doist/todoist-ai"]
+      "args": ["-y", "@ticktick/mcp-server"],
+      "startup_timeout_sec": 30
     }
   }
 }

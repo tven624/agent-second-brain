@@ -1,5 +1,6 @@
-"""Claude processing service."""
+"""Codex processing service."""
 
+import json
 import logging
 import os
 import subprocess
@@ -12,43 +13,68 @@ from d_brain.services.session import SessionStore
 logger = logging.getLogger(__name__)
 
 DEFAULT_TIMEOUT = 1200  # 20 minutes
+DEFAULT_MCP_STARTUP_TIMEOUT = 30
 
 
-class ClaudeProcessor:
-    """Service for triggering Claude Code processing."""
+class CodexProcessor:
+    """Service for triggering Codex CLI processing."""
 
-    def __init__(self, vault_path: Path, todoist_api_key: str = "") -> None:
+    def __init__(
+        self,
+        vault_path: Path,
+        ticktick_api_token: str = "",
+        ticktick_api_domain: str = "",
+        codex_command: str | None = None,
+    ) -> None:
         self.vault_path = Path(vault_path)
-        self.todoist_api_key = todoist_api_key
-        self._mcp_config_path = (self.vault_path.parent / "mcp-config.json").resolve()
+        self.ticktick_api_token = ticktick_api_token
+        self.ticktick_api_domain = ticktick_api_domain
+        self.project_root = self.vault_path.parent
+        self._mcp_config_path = (self.project_root / "mcp-config.json").resolve()
+        self.skills_root = self._detect_skills_root()
+
+        configured_cmd = codex_command or os.environ.get("CODEX_CLI_COMMAND") or "codex"
+        self._codex_commands: list[str] = [configured_cmd]
+
+        if os.name == "nt" and not configured_cmd.lower().endswith(".cmd"):
+            self._codex_commands.append(f"{configured_cmd}.cmd")
+
+    def _detect_skills_root(self) -> Path:
+        """Pick the preferred skills root (.codex first, then .claude fallback)."""
+        codex_root = self.vault_path / ".codex"
+        if codex_root.exists():
+            return codex_root
+
+        claude_root = self.vault_path / ".claude"
+        if claude_root.exists():
+            return claude_root
+
+        return codex_root
 
     def _load_skill_content(self) -> str:
-        """Load dbrain-processor skill content for inclusion in prompt.
-
-        NOTE: @vault/ references don't work in --print mode,
-        so we must include skill content directly in the prompt.
-        """
-        skill_path = self.vault_path / ".claude/skills/dbrain-processor/SKILL.md"
-        if skill_path.exists():
-            return skill_path.read_text()
+        """Load dbrain-processor skill content for inclusion in prompt."""
+        skill_dir = self.skills_root / "skills" / "dbrain-processor"
+        codex_skill = skill_dir / "SKILL-CODEX.md"
+        legacy_skill = skill_dir / "SKILL.md"
+        if codex_skill.exists():
+            return codex_skill.read_text(encoding="utf-8")
+        if legacy_skill.exists():
+            return legacy_skill.read_text(encoding="utf-8")
         return ""
 
-    def _load_todoist_reference(self) -> str:
-        """Load Todoist reference for inclusion in prompt."""
-        ref_path = self.vault_path / ".claude/skills/dbrain-processor/references/todoist.md"
-        if ref_path.exists():
-            return ref_path.read_text()
+    def _load_ticktick_reference(self) -> str:
+        """Load TickTick reference for inclusion in prompt."""
+        references_dir = self.skills_root / "skills" / "dbrain-processor" / "references"
+        ticktick_ref = references_dir / "ticktick.md"
+        legacy_ref = references_dir / "todoist.md"
+        if ticktick_ref.exists():
+            return ticktick_ref.read_text(encoding="utf-8")
+        if legacy_ref.exists():
+            return legacy_ref.read_text(encoding="utf-8")
         return ""
 
     def _get_session_context(self, user_id: int) -> str:
-        """Get today's session context for Claude.
-
-        Args:
-            user_id: Telegram user ID
-
-        Returns:
-            Recent session entries formatted for inclusion in prompt.
-        """
+        """Get today's session context for prompt enrichment."""
         if user_id == 0:
             return ""
 
@@ -67,37 +93,143 @@ class ClaudeProcessor:
         lines.append("=== END SESSION ===\n")
         return "\n".join(lines)
 
+    @staticmethod
+    def _toml_string(value: str) -> str:
+        """Encode string for `codex -c key=value` TOML parsing."""
+        escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+        return f'"{escaped}"'
+
+    def _mcp_overrides(self) -> list[str]:
+        """Translate mcp-config.json into Codex `-c mcp_servers.*` overrides."""
+        if not self._mcp_config_path.exists():
+            return []
+
+        try:
+            config = json.loads(self._mcp_config_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            logger.warning("Failed to parse mcp-config.json: %s", exc)
+            return []
+
+        servers = config.get("mcpServers", {})
+        if not isinstance(servers, dict):
+            return []
+
+        overrides: list[str] = []
+
+        for server_name, server_cfg in servers.items():
+            if not isinstance(server_cfg, dict):
+                continue
+
+            server_type = server_cfg.get("type", "stdio")
+            if server_type != "stdio":
+                logger.info("Skipping unsupported MCP server type '%s' for %s", server_type, server_name)
+                continue
+
+            command = server_cfg.get("command")
+            if not isinstance(command, str) or not command.strip():
+                continue
+
+            overrides.extend(
+                [
+                    "-c",
+                    f"mcp_servers.{server_name}.command={self._toml_string(command)}",
+                ]
+            )
+
+            args = server_cfg.get("args", [])
+            if isinstance(args, list):
+                args_toml = "[" + ",".join(self._toml_string(str(arg)) for arg in args) + "]"
+                overrides.extend(["-c", f"mcp_servers.{server_name}.args={args_toml}"])
+
+            startup_timeout = server_cfg.get(
+                "startup_timeout_sec",
+                DEFAULT_MCP_STARTUP_TIMEOUT,
+            )
+            if isinstance(startup_timeout, int):
+                overrides.extend(
+                    [
+                        "-c",
+                        f"mcp_servers.{server_name}.startup_timeout_sec={startup_timeout}",
+                    ]
+                )
+
+            env_cfg = server_cfg.get("env")
+            if isinstance(env_cfg, dict):
+                for env_key, env_value in env_cfg.items():
+                    if not isinstance(env_key, str):
+                        continue
+                    overrides.extend(
+                        [
+                            "-c",
+                            (
+                                f"mcp_servers.{server_name}.env."
+                                f"{env_key}={self._toml_string(str(env_value))}"
+                            ),
+                        ]
+                    )
+
+        return overrides
+
+    def _run_codex(self, prompt: str) -> subprocess.CompletedProcess[str]:
+        """Execute Codex CLI and return raw subprocess result."""
+        env = os.environ.copy()
+        if self.ticktick_api_token:
+            env["TICKTICK_API_TOKEN"] = self.ticktick_api_token
+            env["API_TOKEN"] = self.ticktick_api_token
+        if self.ticktick_api_domain:
+            env["TICKTICK_API_DOMAIN"] = self.ticktick_api_domain
+            env["API_DOMAIN"] = self.ticktick_api_domain
+
+        args = [
+            "exec",
+            "--skip-git-repo-check",
+            "--sandbox",
+            "workspace-write",
+            *self._mcp_overrides(),
+            prompt,
+        ]
+
+        last_file_error: FileNotFoundError | None = None
+
+        for command in self._codex_commands:
+            try:
+                return subprocess.run(
+                    [command, *args],
+                    cwd=self.project_root,
+                    capture_output=True,
+                    text=True,
+                    timeout=DEFAULT_TIMEOUT,
+                    check=False,
+                    env=env,
+                )
+            except FileNotFoundError as exc:
+                last_file_error = exc
+                continue
+
+        raise last_file_error or FileNotFoundError("Codex CLI not found")
+
     def _html_to_markdown(self, html: str) -> str:
         """Convert Telegram HTML to Obsidian Markdown."""
         import re
 
         text = html
-        # <b>text</b> → **text**
         text = re.sub(r"<b>(.*?)</b>", r"**\1**", text)
-        # <i>text</i> → *text*
         text = re.sub(r"<i>(.*?)</i>", r"*\1*", text)
-        # <code>text</code> → `text`
         text = re.sub(r"<code>(.*?)</code>", r"`\1`", text)
-        # <s>text</s> → ~~text~~
         text = re.sub(r"<s>(.*?)</s>", r"~~\1~~", text)
-        # Remove <u> (no Markdown equivalent, just keep text)
         text = re.sub(r"</?u>", "", text)
-        # <a href="url">text</a> → [text](url)
         text = re.sub(r'<a href="([^"]+)">([^<]+)</a>', r"[\2](\1)", text)
 
         return text
 
     def _save_weekly_summary(self, report_html: str, week_date: date) -> Path:
         """Save weekly summary to vault/summaries/YYYY-WXX-summary.md."""
-        # Calculate ISO week number
         year, week, _ = week_date.isocalendar()
         filename = f"{year}-W{week:02d}-summary.md"
         summary_path = self.vault_path / "summaries" / filename
 
-        # Convert HTML to Markdown for Obsidian
         content = self._html_to_markdown(report_html)
 
-        # Add frontmatter
         frontmatter = f"""---
 date: {week_date.isoformat()}
 type: weekly-summary
@@ -105,7 +237,7 @@ week: {year}-W{week:02d}
 ---
 
 """
-        summary_path.write_text(frontmatter + content)
+        summary_path.write_text(frontmatter + content, encoding="utf-8")
         logger.info("Weekly summary saved to %s", summary_path)
         return summary_path
 
@@ -113,26 +245,18 @@ week: {year}-W{week:02d}
         """Add link to new summary in MOC-weekly.md."""
         moc_path = self.vault_path / "MOC" / "MOC-weekly.md"
         if moc_path.exists():
-            content = moc_path.read_text()
+            content = moc_path.read_text(encoding="utf-8")
             link = f"- [[summaries/{summary_path.name}|{summary_path.stem}]]"
-            # Insert after "## Previous Weeks" if not already there
             if summary_path.stem not in content:
                 content = content.replace(
                     "## Previous Weeks\n",
                     f"## Previous Weeks\n\n{link}\n",
                 )
-                moc_path.write_text(content)
+                moc_path.write_text(content, encoding="utf-8")
                 logger.info("Updated MOC-weekly.md with link to %s", summary_path.stem)
 
     def process_daily(self, day: date | None = None) -> dict[str, Any]:
-        """Process daily file with Claude.
-
-        Args:
-            day: Date to process (default: today)
-
-        Returns:
-            Processing report as dict
-        """
+        """Process daily file with Codex."""
         if day is None:
             day = date.today()
 
@@ -145,162 +269,104 @@ week: {year}-W{week:02d}
                 "processed_entries": 0,
             }
 
-        # Load skill content directly (@ references don't work in --print mode)
         skill_content = self._load_skill_content()
 
-        prompt = f"""Сегодня {day}. Выполни ежедневную обработку.
+        prompt = f"""Today is {day}. Run daily second-brain processing.
 
 === SKILL INSTRUCTIONS ===
 {skill_content}
 === END SKILL ===
 
-ПЕРВЫМ ДЕЛОМ: вызови mcp__todoist__user-info чтобы убедиться что MCP работает.
+FIRST ACTION:
+- Verify TickTick MCP connectivity with a lightweight read tool call.
 
-CRITICAL MCP RULE:
-- ТЫ ИМЕЕШЬ ДОСТУП к mcp__todoist__* tools — ВЫЗЫВАЙ ИХ НАПРЯМУЮ
-- НИКОГДА не пиши "MCP недоступен" или "добавь вручную"
-- Для задач: вызови mcp__todoist__add-tasks tool
-- Если tool вернул ошибку — покажи ТОЧНУЮ ошибку в отчёте
+RULES:
+- Use available mcp__ticktick__* tools directly.
+- Never claim MCP is unavailable without retries.
+- If a tool fails, include the exact error in the report.
 
-CRITICAL OUTPUT FORMAT:
-- Return ONLY raw HTML for Telegram (parse_mode=HTML)
-- NO markdown: no **, no ## , no ```, no tables
-- Start directly with 📊 <b>Обработка за {day}</b>
-- Allowed tags: <b>, <i>, <code>, <s>, <u>
-- If entries already processed, return status report in same HTML format"""
+OUTPUT FORMAT:
+- Return ONLY raw HTML for Telegram (parse_mode=HTML).
+- No Markdown, no code fences, no tables.
+- Start with: <b>Processing report for {day}</b>
+- Allowed tags: <b>, <i>, <code>, <s>, <u>"""
 
         try:
-            # Pass TODOIST_API_KEY to Claude subprocess
-            env = os.environ.copy()
-            if self.todoist_api_key:
-                env["TODOIST_API_KEY"] = self.todoist_api_key
-
-            result = subprocess.run(
-                [
-                    "claude",
-                    "--print",
-                    "--dangerously-skip-permissions",
-                    "--mcp-config",
-                    str(self._mcp_config_path),
-                    "-p",
-                    prompt,
-                ],
-                cwd=self.vault_path.parent,
-                capture_output=True,
-                text=True,
-                timeout=DEFAULT_TIMEOUT,
-                check=False,
-                env=env,
-            )
+            result = self._run_codex(prompt)
 
             if result.returncode != 0:
-                logger.error("Claude processing failed: %s", result.stderr)
+                logger.error("Codex processing failed: %s", result.stderr)
                 return {
-                    "error": result.stderr or "Claude processing failed",
+                    "error": result.stderr.strip() or "Codex processing failed",
                     "processed_entries": 0,
                 }
 
-            # Return human-readable output
             output = result.stdout.strip()
             return {
                 "report": output,
-                "processed_entries": 1,  # успешно обработано
+                "processed_entries": 1,
             }
 
         except subprocess.TimeoutExpired:
-            logger.error("Claude processing timed out")
+            logger.error("Codex processing timed out")
             return {
                 "error": "Processing timed out",
                 "processed_entries": 0,
             }
         except FileNotFoundError:
-            logger.error("Claude CLI not found")
+            logger.error("Codex CLI not found")
             return {
-                "error": "Claude CLI not installed",
+                "error": "Codex CLI not installed",
                 "processed_entries": 0,
             }
-        except Exception as e:
+        except Exception as exc:
             logger.exception("Unexpected error during processing")
             return {
-                "error": str(e),
+                "error": str(exc),
                 "processed_entries": 0,
             }
 
     def execute_prompt(self, user_prompt: str, user_id: int = 0) -> dict[str, Any]:
-        """Execute arbitrary prompt with Claude.
-
-        Args:
-            user_prompt: User's natural language request
-            user_id: Telegram user ID for session context
-
-        Returns:
-            Execution report as dict
-        """
+        """Execute arbitrary prompt with Codex."""
         today = date.today()
 
-        # Load context
-        todoist_ref = self._load_todoist_reference()
+        ticktick_ref = self._load_ticktick_reference()
         session_context = self._get_session_context(user_id)
 
-        prompt = f"""Ты - персональный ассистент d-brain.
+        prompt = f"""You are the d-brain personal assistant.
 
 CONTEXT:
-- Текущая дата: {today}
+- Current date: {today}
 - Vault path: {self.vault_path}
 
-{session_context}=== TODOIST REFERENCE ===
-{todoist_ref}
+{session_context}=== TICKTICK REFERENCE ===
+{ticktick_ref}
 === END REFERENCE ===
 
-ПЕРВЫМ ДЕЛОМ: вызови mcp__todoist__user-info чтобы убедиться что MCP работает.
+FIRST ACTION:
+- Verify TickTick MCP connectivity with a lightweight read tool call.
 
-CRITICAL MCP RULE:
-- ТЫ ИМЕЕШЬ ДОСТУП к mcp__todoist__* tools — ВЫЗЫВАЙ ИХ НАПРЯМУЮ
-- НИКОГДА не пиши "MCP недоступен" или "добавь вручную"
-- Если tool вернул ошибку — покажи ТОЧНУЮ ошибку в отчёте
+RULES:
+- Use mcp__ticktick__* tools directly when needed.
+- If a tool fails, include the exact error in the report.
 
 USER REQUEST:
 {user_prompt}
 
-CRITICAL OUTPUT FORMAT:
+OUTPUT FORMAT:
 - Return ONLY raw HTML for Telegram (parse_mode=HTML)
-- NO markdown: no **, no ##, no ```, no tables, no -
+- No Markdown, no code fences, no tables
 - Start with emoji and <b>header</b>
 - Allowed tags: <b>, <i>, <code>, <s>, <u>
-- Be concise - Telegram has 4096 char limit
-
-EXECUTION:
-1. Analyze the request
-2. Call MCP tools directly (mcp__todoist__*, read/write files)
-3. Return HTML status report with results"""
+- Be concise (Telegram max length 4096)"""
 
         try:
-            env = os.environ.copy()
-            if self.todoist_api_key:
-                env["TODOIST_API_KEY"] = self.todoist_api_key
-
-            result = subprocess.run(
-                [
-                    "claude",
-                    "--print",
-                    "--dangerously-skip-permissions",
-                    "--mcp-config",
-                    str(self._mcp_config_path),
-                    "-p",
-                    prompt,
-                ],
-                cwd=self.vault_path.parent,
-                capture_output=True,
-                text=True,
-                timeout=DEFAULT_TIMEOUT,
-                check=False,
-                env=env,
-            )
+            result = self._run_codex(prompt)
 
             if result.returncode != 0:
-                logger.error("Claude execution failed: %s", result.stderr)
+                logger.error("Codex execution failed: %s", result.stderr)
                 return {
-                    "error": result.stderr or "Claude execution failed",
+                    "error": result.stderr.strip() or "Codex execution failed",
                     "processed_entries": 0,
                 }
 
@@ -310,84 +376,58 @@ EXECUTION:
             }
 
         except subprocess.TimeoutExpired:
-            logger.error("Claude execution timed out")
+            logger.error("Codex execution timed out")
             return {"error": "Execution timed out", "processed_entries": 0}
         except FileNotFoundError:
-            logger.error("Claude CLI not found")
-            return {"error": "Claude CLI not installed", "processed_entries": 0}
-        except Exception as e:
+            logger.error("Codex CLI not found")
+            return {"error": "Codex CLI not installed", "processed_entries": 0}
+        except Exception as exc:
             logger.exception("Unexpected error during execution")
-            return {"error": str(e), "processed_entries": 0}
+            return {"error": str(exc), "processed_entries": 0}
 
     def generate_weekly(self) -> dict[str, Any]:
-        """Generate weekly digest with Claude.
-
-        Returns:
-            Weekly digest report as dict
-        """
+        """Generate weekly digest with Codex."""
         today = date.today()
 
-        prompt = f"""Сегодня {today}. Сгенерируй недельный дайджест.
+        prompt = f"""Today is {today}. Generate a weekly digest.
 
-ПЕРВЫМ ДЕЛОМ: вызови mcp__todoist__user-info чтобы убедиться что MCP работает.
+FIRST ACTION:
+- Verify TickTick MCP connectivity with a lightweight read tool call.
 
-CRITICAL MCP RULE:
-- ТЫ ИМЕЕШЬ ДОСТУП к mcp__todoist__* tools — ВЫЗЫВАЙ ИХ НАПРЯМУЮ
-- НИКОГДА не пиши "MCP недоступен" или "добавь вручную"
-- Для выполненных задач: вызови mcp__todoist__find-completed-tasks tool
-- Если tool вернул ошибку — покажи ТОЧНУЮ ошибку в отчёте
+RULES:
+- Use TickTick MCP task/project tools directly.
+- If a tool fails, include the exact error in the report.
 
 WORKFLOW:
-1. Собери данные за неделю (daily файлы в vault/daily/, completed tasks через MCP)
-2. Проанализируй прогресс по целям (goals/3-weekly.md)
-3. Определи победы и вызовы
-4. Сгенерируй HTML отчёт
+1. Read weekly context from vault/daily and goals/3-weekly.md.
+2. Fetch task status/progress from TickTick MCP.
+3. Summarize wins, blockers, and next focus.
+4. Return a concise weekly digest.
 
-CRITICAL OUTPUT FORMAT:
+OUTPUT FORMAT:
 - Return ONLY raw HTML for Telegram (parse_mode=HTML)
-- NO markdown: no **, no ##, no ```, no tables
-- Start with 📅 <b>Недельный дайджест</b>
+- No Markdown, no code fences, no tables
+- Start with: <b>Weekly digest</b>
 - Allowed tags: <b>, <i>, <code>, <s>, <u>
-- Be concise - Telegram has 4096 char limit"""
+- Keep under Telegram limit (4096 chars)"""
 
         try:
-            env = os.environ.copy()
-            if self.todoist_api_key:
-                env["TODOIST_API_KEY"] = self.todoist_api_key
-
-            result = subprocess.run(
-                [
-                    "claude",
-                    "--print",
-                    "--dangerously-skip-permissions",
-                    "--mcp-config",
-                    str(self._mcp_config_path),
-                    "-p",
-                    prompt,
-                ],
-                cwd=self.vault_path.parent,
-                capture_output=True,
-                text=True,
-                timeout=DEFAULT_TIMEOUT,
-                check=False,
-                env=env,
-            )
+            result = self._run_codex(prompt)
 
             if result.returncode != 0:
                 logger.error("Weekly digest failed: %s", result.stderr)
                 return {
-                    "error": result.stderr or "Weekly digest failed",
+                    "error": result.stderr.strip() or "Weekly digest failed",
                     "processed_entries": 0,
                 }
 
             output = result.stdout.strip()
 
-            # Save to summaries/ and update MOC
             try:
                 summary_path = self._save_weekly_summary(output, today)
                 self._update_weekly_moc(summary_path)
-            except Exception as e:
-                logger.warning("Failed to save weekly summary: %s", e)
+            except Exception as exc:
+                logger.warning("Failed to save weekly summary: %s", exc)
 
             return {
                 "report": output,
@@ -398,8 +438,12 @@ CRITICAL OUTPUT FORMAT:
             logger.error("Weekly digest timed out")
             return {"error": "Weekly digest timed out", "processed_entries": 0}
         except FileNotFoundError:
-            logger.error("Claude CLI not found")
-            return {"error": "Claude CLI not installed", "processed_entries": 0}
-        except Exception as e:
+            logger.error("Codex CLI not found")
+            return {"error": "Codex CLI not installed", "processed_entries": 0}
+        except Exception as exc:
             logger.exception("Unexpected error during weekly digest")
-            return {"error": str(e), "processed_entries": 0}
+            return {"error": str(exc), "processed_entries": 0}
+
+
+# Backward compatibility for existing imports.
+ClaudeProcessor = CodexProcessor

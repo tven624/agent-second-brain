@@ -1,5 +1,8 @@
 # Agent Second Brain
 
+> **Note:** This is a legacy v1 guide and still contains Claude-era wording.
+> For the Codex setup flow, use [`docs/vps-setup.md`](./vps-setup.md) and [`docs/mcp-cli-setup.md`](./mcp-cli-setup.md).
+
 <p align="center">
   <img alt="telegram-cloud-photo-size-2-5332708313742904084-y" src="https://github.com/user-attachments/assets/ea384e65-436b-48a1-a4e1-2b003cafcdbf" />
 </p>
