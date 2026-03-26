@@ -3,6 +3,7 @@
 import json
 import logging
 import os
+import shlex
 import subprocess
 from datetime import date
 from pathlib import Path
@@ -34,10 +35,21 @@ class CodexProcessor:
         self.skills_root = self._detect_skills_root()
 
         configured_cmd = codex_command or os.environ.get("CODEX_CLI_COMMAND") or "codex"
-        self._codex_commands: list[str] = [configured_cmd]
+        self._codex_commands: list[list[str]] = [self._split_command(configured_cmd)]
 
-        if os.name == "nt" and not configured_cmd.lower().endswith(".cmd"):
-            self._codex_commands.append(f"{configured_cmd}.cmd")
+        if os.name == "nt" and len(self._codex_commands[0]) == 1:
+            first = self._codex_commands[0][0]
+            if not first.lower().endswith(".cmd"):
+                self._codex_commands.append([f"{first}.cmd"])
+
+    @staticmethod
+    def _split_command(command: str) -> list[str]:
+        """Split command string into executable + args."""
+        try:
+            parts = shlex.split(command, posix=os.name != "nt")
+        except ValueError:
+            parts = [command]
+        return parts or [command]
 
     def _detect_skills_root(self) -> Path:
         """Pick the preferred skills root (.codex first, then .claude fallback)."""
@@ -191,10 +203,10 @@ class CodexProcessor:
 
         last_file_error: FileNotFoundError | None = None
 
-        for command in self._codex_commands:
+        for command_parts in self._codex_commands:
             try:
                 return subprocess.run(
-                    [command, *args],
+                    [*command_parts, *args],
                     cwd=self.project_root,
                     capture_output=True,
                     text=True,
